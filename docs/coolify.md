@@ -42,6 +42,35 @@ Avoid routing Coolify itself (`coolify`, `coolify-proxy`, `coolify-db`,
 `coolify-redis`) unless you know why: the proxy then fetches certificates
 through the VPN, and the dashboard's own outbound calls depend on it.
 
+## Troubleshooting
+
+**The service stays "exited" and nothing is pulled.** Coolify's log shows
+`CoolifyTask ... FAIL` right after `StartService`, and on the server
+`docker compose up` reports *network <uuid> declared as external, but could
+not be found*. Coolify gives the stack an external network named after the
+service UUID but, because `agent` and `guard` use `network_mode`, it may not
+create it. Create it once on the server, then start the service again:
+
+```sh
+docker network create --attachable <service-uuid>
+```
+
+**`all predefined address pools have been fully subnetted`.** Docker's
+default pools allow about 31 networks; a busy Coolify server runs out, and
+every new resource then fails the same way. Either give this network an
+explicit subnet that is not in use:
+
+```sh
+docker network create --attachable --subnet 10.250.251.0/24 <service-uuid>
+```
+
+or, for all future resources, add smaller pools to `/etc/docker/daemon.json`
+and restart Docker (this restarts every container on the server):
+
+```json
+{ "default-address-pools": [ { "base": "10.200.0.0/16", "size": 24 } ] }
+```
+
 ## Notes
 
 - Redeploying v2dock removes its firewall rules first; routed containers use

@@ -180,9 +180,9 @@ func (s *authState) bootstrap(ctx context.Context) error {
 	}
 	if pw := s.a.cfg.AdminPassword; pw != "" {
 		if err := s.SetPassword(ctx, pw); err != nil {
-			return fmt.Errorf("V2DOCK_ADMIN_PASSWORD: %w", err)
+			return fmt.Errorf("admin password from the environment: %w", err)
 		}
-		slog.Info("admin password set from V2DOCK_ADMIN_PASSWORD")
+		slog.Info("admin password set from the environment (V2DOCK_ADMIN_PASSWORD or SERVICE_PASSWORD_ADMIN)")
 		return nil
 	}
 	tok := s.a.cfg.SetupToken
