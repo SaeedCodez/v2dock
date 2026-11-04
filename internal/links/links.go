@@ -177,14 +177,18 @@ func validateEndpoint(host string, port int) error {
 	return nil
 }
 
-// cleanName makes a display name safe: valid UTF-8, no control characters,
-// bounded length.
+// CleanName makes a display name safe: valid UTF-8, no control or bidi
+// characters, bounded length.
+func CleanName(s string, max int) string { return cleanName(s, max) }
+
 func cleanName(s string, max int) string {
 	if !utf8.ValidString(s) {
 		s = strings.ToValidUTF8(s, "")
 	}
 	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || r == '‎' || r == '‏' || r == '‮' {
+		// Control characters (terminal escapes) and bidi controls (text that
+		// renders reversed or reordered) never belong in a name.
+		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) {
 			return -1
 		}
 		return r
@@ -325,6 +329,7 @@ func buildStream(p streamParams, address string) (map[string]any, string, error)
 	}
 	ss := map[string]any{"network": network}
 	path := p.path
+	warning := ""
 	switch network {
 	case "raw":
 		if p.headerType == "http" {
@@ -364,9 +369,12 @@ func buildStream(p streamParams, address string) (map[string]any, string, error)
 			x["mode"] = p.mode
 		}
 		if p.extra != "" {
-			var extra map[string]any
-			if err := json.Unmarshal([]byte(p.extra), &extra); err == nil {
+			extra, dropped := safeXHTTPExtra(p.extra)
+			if len(extra) > 0 {
 				x["extra"] = extra
+			}
+			if dropped {
+				warning = "some xhttp extra options were ignored"
 			}
 		}
 		ss["xhttpSettings"] = x
@@ -377,7 +385,6 @@ func buildStream(p streamParams, address string) (map[string]any, string, error)
 		ss["kcpSettings"] = map[string]any{}
 	}
 
-	warning := ""
 	switch p.security {
 	case "", "none":
 		ss["security"] = "none"

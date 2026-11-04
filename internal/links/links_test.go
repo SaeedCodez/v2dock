@@ -3,6 +3,7 @@ package links
 import (
 	"encoding/base64"
 	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -119,5 +120,38 @@ func TestCleanName(t *testing.T) {
 	}
 	if got := cleanName(strings.Repeat("ا", 200), 120); len([]rune(got)) != 120 {
 		t.Fatal("not truncated")
+	}
+}
+
+func TestXHTTPExtraIsWhitelisted(t *testing.T) {
+	evil := `{"xPaddingBytes":"100-1000","xmux":{"maxConcurrency":"16-32","evil":1},` +
+		`"downloadSettings":{"address":"127.0.0.1","port":22,"tlsSettings":{"masterKeyLog":"/data/v2dock.db"},"sockopt":{"mark":1}},` +
+		`"headers":{"X-A":"b","X-Bad":"a\r\nb"}}`
+	link := "vless://0b4e7a9e-6b1f-4d3a-9c2e-1f2a3b4c5d6e@x.example.com:443?security=tls&type=xhttp&path=%2Fx&extra=" + url.QueryEscape(evil) + "#X"
+	s, err := ParseLink(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(s.Outbound)
+	out := string(b)
+	for _, bad := range []string{"downloadSettings", "masterKeyLog", "sockopt", "evil", "X-Bad"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("%s leaked into the outbound: %s", bad, out)
+		}
+	}
+	for _, good := range []string{"xPaddingBytes", "maxConcurrency", "X-A"} {
+		if !strings.Contains(out, good) {
+			t.Errorf("%s was dropped: %s", good, out)
+		}
+	}
+	if s.Warning == "" {
+		t.Error("dropping options should leave a warning")
+	}
+}
+
+func TestBidiAndEscapesStripped(t *testing.T) {
+	in := "a‭b⁦c⁩\x1b[31md؜e"
+	if got := cleanName(in, 50); got != "abc[31mde" {
+		t.Fatalf("got %q", got)
 	}
 }

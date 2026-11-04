@@ -3,6 +3,7 @@ package xcore
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/netip"
@@ -147,5 +148,43 @@ func TestCountersCollected(t *testing.T) {
 	}
 	if again := inst.TakeCounters(); again["t1"].Down != 0 {
 		t.Fatal("counters not reset")
+	}
+}
+
+// DNS and TCP from addresses that are not selected containers must be
+// dropped, never relayed.
+func TestUnknownSourcesBlocked(t *testing.T) {
+	s, _ := links.ParseLink(sampleLinks[0])
+	cfg, err := BuildMain(Plan{
+		Outbound: s.Outbound, TProxyPort: 12701, DNSPort: 12702,
+		Routes: []RoutePlan{
+			{Key: "name:a", IPs: []netip.Addr{netip.MustParseAddr("172.18.0.5")}, Mode: ModeVPN},
+			{Key: "name:b", IPs: []netip.Addr{netip.MustParseAddr("172.18.0.6")}, Mode: ModeDirect},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct {
+		Routing struct {
+			Rules []map[string]any `json:"rules"`
+		} `json:"routing"`
+	}
+	if err := json.Unmarshal(cfg, &c); err != nil {
+		t.Fatal(err)
+	}
+	rules := c.Routing.Rules
+	last := rules[len(rules)-1]
+	if last["outboundTag"] != "block" || len(last) != 2 {
+		t.Fatalf("last rule must block everything else: %v", last)
+	}
+	for _, r := range rules {
+		tags, _ := r["inboundTag"].([]any)
+		if len(tags) == 1 && tags[0] == "dns-in" && r["outboundTag"] == "dns-out" {
+			src, _ := r["source"].([]any)
+			if len(src) != 1 || src[0] != "172.18.0.5" {
+				t.Fatalf("DNS must be answered only for VPN clients, got %v", r)
+			}
+		}
 	}
 }

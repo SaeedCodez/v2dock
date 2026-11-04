@@ -113,7 +113,11 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(g, stdout, stderr, usageError{err.Error()})
 	}
-	r := &runner{g: g, c: c, a: a, out: stdout}
+	out := stdout
+	if !g.json {
+		out = safeWriter{stdout}
+	}
+	r := &runner{g: g, c: c, a: a, out: out}
 	cmd := a.arg(0)
 	sub := a.arg(1)
 	switch cmd {
@@ -175,7 +179,7 @@ func fail(g *globals, stdout, stderr io.Writer, err error) int {
 		b, _ := json.Marshal(map[string]any{"ok": false, "code": ecode, "error": err.Error(), "exit": code})
 		fmt.Fprintln(stdout, string(b))
 	} else {
-		fmt.Fprintln(stderr, "error:", err)
+		fmt.Fprintln(safeWriter{stderr}, "error:", err)
 	}
 	return code
 }

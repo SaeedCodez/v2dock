@@ -6,8 +6,10 @@ agents: every command takes `--json`, prints exactly one JSON object with an
 
 ## Where to run it
 
-**On the server (recommended)** — inside the agent container, over the unix
-socket, no password needed (whoever can `docker exec` is already root):
+**On the server (recommended)** — inside the **agent** container, over the
+unix socket, no password needed (the agent trusts only root callers on its
+socket; whoever can `docker exec` is already root). Running the CLI in the web
+container does not work without a token, by design:
 
 ```sh
 docker exec <agent-container> v2dock --json status

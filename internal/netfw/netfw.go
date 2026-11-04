@@ -77,12 +77,10 @@ func run(ctx context.Context, stdin []byte, name string, args ...string) (string
 	return out.String(), nil
 }
 
-// Render returns the nft script for the given client addresses. Exposed for
-// tests and diagnostics.
-func (f *Firewall) Render(clients []netip.Addr) string {
+func uniqueV4(addrs []netip.Addr) []string {
 	var ips []string
 	seen := map[string]bool{}
-	for _, a := range clients {
+	for _, a := range addrs {
 		if !a.Is4() || a.IsUnspecified() || a.IsLoopback() {
 			continue
 		}
@@ -93,16 +91,30 @@ func (f *Firewall) Render(clients []netip.Addr) string {
 		}
 	}
 	sort.Strings(ips)
-	var b strings.Builder
-	// "add" then "delete" makes the replacement atomic and idempotent.
-	fmt.Fprintf(&b, "add table ip %s\n", tableName)
-	fmt.Fprintf(&b, "delete table ip %s\n", tableName)
-	fmt.Fprintf(&b, "table ip %s {\n", tableName)
-	b.WriteString("  set clients {\n    type ipv4_addr\n")
+	return ips
+}
+
+func writeSet(b *strings.Builder, name string, ips []string) {
+	fmt.Fprintf(b, "  set %s {\n    type ipv4_addr\n", name)
 	if len(ips) > 0 {
-		fmt.Fprintf(&b, "    elements = { %s }\n", strings.Join(ips, ", "))
+		fmt.Fprintf(b, "    elements = { %s }\n", strings.Join(ips, ", "))
 	}
 	b.WriteString("  }\n")
+}
+
+// Render returns the nft script. clients are redirected into the proxy;
+// blocked (a subset: over quota with action "block") additionally lose
+// non-DNS UDP to the outside, which the proxy cannot see or count.
+func (f *Firewall) Render(clients, blocked []netip.Addr) string {
+	var b strings.Builder
+	// "add" then "delete" makes the replacement atomic and idempotent.
+	for _, fam := range []string{"ip", "ip6"} {
+		fmt.Fprintf(&b, "add table %s %s\n", fam, tableName)
+		fmt.Fprintf(&b, "delete table %s %s\n", fam, tableName)
+	}
+	fmt.Fprintf(&b, "table ip %s {\n", tableName)
+	writeSet(&b, "clients", uniqueV4(clients))
+	writeSet(&b, "blocked", uniqueV4(blocked))
 	fmt.Fprintf(&b, "  set skip {\n    type ipv4_addr\n    flags interval\n    elements = { %s }\n  }\n", strings.Join(skipNets, ", "))
 	// Before Docker's own DNAT (dstnat = -100).
 	b.WriteString("  chain prerouting {\n    type nat hook prerouting priority dstnat - 10; policy accept;\n")
@@ -121,15 +133,26 @@ func (f *Firewall) Render(clients []netip.Addr) string {
 	// "& dnat != dnat" tests the bit; "ct status != dnat" would compare the
 	// whole flag set and drop everything.
 	fmt.Fprintf(&b, "    iifname != \"lo\" meta l4proto { tcp, udp } th dport { %d, %d } ct status & dnat != dnat drop\n", f.TCPPort, f.DNSPort)
+	b.WriteString("  }\n")
+	b.WriteString("  chain forward {\n    type filter hook forward priority filter - 10; policy accept;\n")
+	b.WriteString("    ip saddr != @blocked return\n")
+	b.WriteString("    ip daddr @skip return\n")
+	b.WriteString("    meta l4proto udp udp dport != 53 drop\n")
+	b.WriteString("  }\n}\n")
+	// The listeners are dual-stack sockets; nothing is ever redirected over
+	// IPv6, so any IPv6 packet to the proxy ports is refused outright.
+	fmt.Fprintf(&b, "table ip6 %s {\n", tableName)
+	b.WriteString("  chain input {\n    type filter hook input priority filter - 10; policy accept;\n")
+	fmt.Fprintf(&b, "    iifname != \"lo\" meta l4proto { tcp, udp } th dport { %d, %d } drop\n", f.TCPPort, f.DNSPort)
 	b.WriteString("  }\n}\n")
 	return b.String()
 }
 
-// Apply installs (or atomically replaces) the rules for these clients.
-func (f *Firewall) Apply(ctx context.Context, clients []netip.Addr) error {
+// Apply installs (or atomically replaces) the rules.
+func (f *Firewall) Apply(ctx context.Context, clients, blocked []netip.Addr) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if _, err := run(ctx, []byte(f.Render(clients)), "nft", "-f", "-"); err != nil {
+	if _, err := run(ctx, []byte(f.Render(clients, blocked)), "nft", "-f", "-"); err != nil {
 		return err
 	}
 	f.ensureInputAccept(ctx)
@@ -141,9 +164,11 @@ func (f *Firewall) Remove(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var errs []error
-	if _, err := run(ctx, nil, "nft", "list", "table", "ip", tableName); err == nil {
-		if _, err := run(ctx, nil, "nft", "delete", "table", "ip", tableName); err != nil {
-			errs = append(errs, err)
+	for _, fam := range []string{"ip", "ip6"} {
+		if _, err := run(ctx, nil, "nft", "list", "table", fam, tableName); err == nil {
+			if _, err := run(ctx, nil, "nft", "delete", "table", fam, tableName); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 	f.removeInputAccept(ctx)

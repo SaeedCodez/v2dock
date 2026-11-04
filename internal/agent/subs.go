@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/SaeedCodez/v2dock/internal/links"
@@ -37,17 +40,17 @@ func validateSubURL(raw string) (*url.URL, error) {
 }
 
 // maskURL hides the secret part of a subscription URL (usually a token in
-// the path or query) for display.
+// the path or query) for display: only scheme and host remain.
 func maskURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
 		return ""
 	}
-	path := u.Path
-	if len(path) > 6 {
-		path = path[:min(len(path), 6)] + "…"
+	out := u.Scheme + "://" + u.Host
+	if u.Path != "" && u.Path != "/" || u.RawQuery != "" {
+		out += "/…"
 	}
-	return u.Scheme + "://" + u.Host + path
+	return out
 }
 
 type fetchResult struct {
@@ -132,16 +135,44 @@ func parseTitle(h string) string {
 			h = string(b)
 		}
 	}
-	h = strings.TrimSpace(h)
-	if len(h) > 80 {
-		h = h[:80]
+	return links.CleanName(h, 60)
+}
+
+// blockedFetchIP reports addresses a subscription download must never reach:
+// the agent runs in the host's network namespace, so loopback services,
+// link-local cloud metadata endpoints and the like are off limits, including
+// through redirects. Private ranges stay allowed (panels on a LAN).
+func blockedFetchIP(ip net.IP) bool {
+	a, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return true
 	}
-	return h
+	a = a.Unmap()
+	return a.IsLoopback() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() || a.IsMulticast() ||
+		a.IsUnspecified() || a.IsInterfaceLocalMulticast() ||
+		netip.MustParsePrefix("100.100.100.200/32").Contains(a) // Alibaba metadata
+}
+
+func guardedDialer() *net.Dialer {
+	return &net.Dialer{
+		Timeout: 15 * time.Second,
+		Control: func(network, address string, c syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return err
+			}
+			if ip := net.ParseIP(host); ip == nil || blockedFetchIP(ip) {
+				return fmt.Errorf("refusing to fetch from %s", host)
+			}
+			return nil
+		},
+	}
 }
 
 func directClient() *http.Client {
 	return &http.Client{
-		Timeout: 25 * time.Second,
+		Timeout:   25 * time.Second,
+		Transport: &http.Transport{DialContext: guardedDialer().DialContext, TLSHandshakeTimeout: 15 * time.Second, ResponseHeaderTimeout: 20 * time.Second},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return errors.New("too many redirects")

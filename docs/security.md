@@ -34,11 +34,15 @@ kernel requires. Its API is a unix socket (mode 0660, group 65532) in a volume
 shared only with `web`; it opens no API port. Xray runs inside the agent
 process, so there is no Xray API port and no SOCKS/HTTP proxy port. The only
 listeners are the two transparent-proxy ports (TCP 12701, DNS 12702). They
-accept only connections that v2dock's own rule redirected: nftables drops
-every packet to them whose conntrack entry is not DNAT, and inside Xray any
-source that is not a selected container hits a final `block` rule.
+accept only connections that v2dock's own rule redirected: over IPv4,
+nftables drops every packet to them whose conntrack entry is not DNAT; over
+IPv6 (the listeners are dual-stack sockets, and nothing is ever redirected
+over IPv6) every packet to them is dropped. Inside Xray, TCP and DNS from any
+source that is not a selected container hit a final `block` rule, so even a
+packet that slipped past the firewall would not be relayed.
 
-The agent owns only its own firewall objects: table `ip v2dock` and, on hosts
+The agent owns only its own firewall objects: tables `ip v2dock` and
+`ip6 v2dock` and, on hosts
 whose `INPUT` chain drops traffic (UFW), two `ACCEPT` rules that match only
 redirected (`--ctstate DNAT`) connections to those two ports. All of it is
 removed on shutdown, so a stopped v2dock never leaves containers pointing at a
@@ -51,6 +55,13 @@ TPROXY rule assigns there is dropped when the packet reaches the IP layer, so
 the kernel resets the connection. Destination NAT survives that path (Docker's
 published ports depend on it), and Xray reads the original destination from
 conntrack.
+
+**Who may use the agent socket without a password**: the agent asks the
+kernel who is on the other end (`SO_PEERCRED`) and trusts only its own user
+(root), i.e. the CLI run with `docker exec` into the agent. The web gateway
+runs as uid 65532 and is always treated as a network client: even if it were
+compromised and stopped sending the gateway header, every request would still
+need a valid session or token.
 
 **web** is the internet-facing gateway. It serves the embedded UI and forwards
 `/api/*` to the agent socket. It runs as an unprivileged user with no
@@ -66,9 +77,12 @@ capabilities and no access to Docker or the host network.
   The variable is read only while no password exists, so changing the
   password in Settings afterwards makes it irrelevant; the agent also clears
   it from its own environment after reading it.
-- **Login throttling** per client IP (5 failures → 1 min lock, doubling up to
-  an hour) plus a global brake against distributed guessing. Failed logins are
-  written to the activity log with the client IP.
+- **Login throttling** per client (an IPv4 address or an IPv6 /64): one check
+  at a time, 5 failures → 1 min lock, doubling up to an hour. A global brake
+  against distributed guessing refuses unknown clients after 100 failures in
+  10 minutes, but never clients that have logged in successfully, so an
+  attacker cannot lock the admin out. Failed logins are written to the activity
+  log with the client IP. The CLI (`password set`) always works as a way back in.
 - **Optional TOTP 2FA** (RFC 6238, ±30 s, a code can be used only once).
 - **Sessions**: 256-bit random tokens; only their SHA-256 is stored. Cookie is
   `HttpOnly`, `SameSite=Strict`, and `Secure` + `__Host-` prefixed behind HTTPS.
@@ -76,7 +90,8 @@ capabilities and no access to Docker or the host network.
   session; "Sign out everywhere" does too.
 - **API tokens** for the CLI / AI agents: shown once, stored hashed, `read`
   (GET only) or `admin` scope. No token can create tokens, change the password
-  or touch 2FA.
+  or touch 2FA. Tokens are independent of the password and of browser
+  sessions: changing the password does not revoke them; revoke them in Settings.
 
 ## Request handling
 
@@ -98,16 +113,40 @@ capabilities and no access to Docker or the host network.
 
 Subscription bodies come from a remote server and are treated as hostile:
 size-capped (4 MB, 2000 servers), every link parsed into a typed structure,
-host names and ports validated, display names stripped of control and
-bidi-override characters and length-limited, and only known protocols,
-transports and options are turned into Xray configuration. Links whose
-options Xray no longer supports are skipped with a reason instead of being
-passed through. Xray itself also refuses plaintext VLESS/Trojan to public
-addresses.
+host names and ports validated, display names (and the `Profile-Title`
+header) stripped of control and bidi characters and length-limited, and only
+known protocols, transports and options are turned into Xray configuration.
+Free-form JSON in links (xhttp `extra`) is reduced to a whitelist of scalar
+tuning options; nested stream settings such as `downloadSettings`, which
+could name files or socket options, are dropped. Links whose options Xray no
+longer supports are skipped with a reason. Xray itself also refuses plaintext
+VLESS/Trojan to public addresses.
+
+Downloads run in the host's network namespace, so they refuse loopback,
+link-local (cloud metadata) and multicast addresses, including after
+redirects. Plain `http://` subscriptions work but are flagged, since anyone on
+the path could change them. The CLI neutralises terminal control characters in
+its human-readable output.
 
 Subscription URLs and server links contain credentials. They are stored only in
 the agent's database (directory 0700, file 0600) and never returned by the API:
 URLs are shown masked, server links not at all.
+
+## Limits and things to know
+
+- `V2DOCK_ADMIN_PASSWORD` / `SERVICE_PASSWORD_ADMIN` stay visible to anyone
+  with Docker access (`docker inspect`). They are only read while no password
+  exists: change the password after the first login.
+- Every private-range peer is a trusted proxy by default (that is how the
+  gateway learns client IPs behind Coolify's Traefik). Another container on the
+  same Docker network could therefore claim any client IP for rate limiting and
+  the activity log. Set `V2DOCK_TRUSTED_PROXIES` to the proxy's address to
+  tighten this.
+- The Iran geo data is verified against the checksum published with the same
+  release; that proves integrity, not who published it.
+- When a container is over a `block` quota, its TCP is blocked in Xray and its
+  non-DNS UDP is dropped by nftables; Iranian and private destinations keep
+  working.
 
 ## What v2dock does not protect against
 

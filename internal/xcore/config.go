@@ -88,9 +88,26 @@ func BuildMain(p Plan) ([]byte, error) {
 		cloneOutbound(p.Outbound, "proxy"),
 	}
 	rules := []any{
-		map[string]any{"inboundTag": []string{"dns-in"}, "outboundTag": "dns-out"},
 		map[string]any{"inboundTag": []string{"dns-internal"}, "outboundTag": "proxy"},
 	}
+	// DNS is answered only for selected containers; anything else reaching
+	// the DNS port (nftables should make that impossible) is dropped.
+	var dnsClients []string
+	for _, r := range p.Routes {
+		if r.Mode == ModeDirect {
+			continue
+		}
+		for _, ip := range r.IPs {
+			if ip.Is4() {
+				dnsClients = append(dnsClients, ip.String())
+			}
+		}
+	}
+	sort.Strings(dnsClients)
+	if len(dnsClients) > 0 {
+		rules = append(rules, map[string]any{"inboundTag": []string{"dns-in"}, "source": dnsClients, "outboundTag": "dns-out"})
+	}
+	rules = append(rules, map[string]any{"inboundTag": []string{"dns-in"}, "outboundTag": "block"})
 
 	routes := append([]RoutePlan(nil), p.Routes...)
 	sort.Slice(routes, func(i, j int) bool { return routes[i].Key < routes[j].Key })
@@ -135,7 +152,7 @@ func BuildMain(p Plan) ([]byte, error) {
 	// Anything else that reaches the transparent proxy did not come from a
 	// selected container (nftables should make that impossible): drop it
 	// rather than relay it.
-	rules = append(rules, map[string]any{"inboundTag": []string{"tproxy-in"}, "outboundTag": "block"})
+	rules = append(rules, map[string]any{"inboundTag": []string{"tproxy-in", "dns-in"}, "outboundTag": "block"})
 
 	remote := p.RemoteDNS
 	if remote == "" {

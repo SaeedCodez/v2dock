@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,18 +68,20 @@ type attempt struct {
 	fails       int
 	lockedUntil time.Time
 	last        time.Time
+	inflight    bool
 }
 
 type authState struct {
 	a        *Agent
 	mu       sync.Mutex
 	attempts map[string]*attempt
-	recent   []time.Time // failed logins from anywhere, for a global brake
+	known    map[string]time.Time // clients that logged in successfully
+	recent   []time.Time          // failed logins from anywhere, for a global brake
 	hashSem  chan struct{}
 }
 
 func newAuthState(a *Agent) *authState {
-	return &authState{a: a, attempts: map[string]*attempt{}, hashSem: make(chan struct{}, 2)}
+	return &authState{a: a, attempts: map[string]*attempt{}, known: map[string]time.Time{}, hashSem: make(chan struct{}, 2)}
 }
 
 func randomID(n int) string {
@@ -208,38 +211,73 @@ func (s *authState) clearSetupToken() {
 
 // ----------------------------------------------------------- rate limiting
 
-// allowAttempt reports whether ip may try to log in now, and if not, how
-// long it has to wait.
-func (s *authState) allowAttempt(ip string) (bool, time.Duration) {
+// limitKey groups addresses the way an attacker controls them: one IPv4
+// address, or one IPv6 /64 (a single host usually owns the whole /64).
+func limitKey(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	a = a.Unmap()
+	if a.Is6() {
+		p, _ := a.Prefix(64)
+		return p.String()
+	}
+	return a.String()
+}
+
+// beginAttempt reserves a password/code check for ip. Only one check per
+// client runs at a time, so parallel requests cannot all pass the counter
+// before the first failure is recorded. The returned function must be called
+// when the check is over.
+func (s *authState) beginAttempt(ip string) (func(), time.Duration, bool) {
+	key := limitKey(ip)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	if at := s.attempts[ip]; at != nil && now.Before(at.lockedUntil) {
-		return false, at.lockedUntil.Sub(now)
+	at := s.attempts[key]
+	if at == nil {
+		at = &attempt{}
+		s.attempts[key] = at
 	}
-	// Global brake: many failures from many addresses means a distributed
-	// guessing attempt; slow everyone down.
-	cut := now.Add(-10 * time.Minute)
-	n := 0
-	for _, t := range s.recent {
-		if t.After(cut) {
-			n++
+	if now.Before(at.lockedUntil) {
+		return nil, at.lockedUntil.Sub(now), false
+	}
+	if at.inflight {
+		return nil, time.Second, false
+	}
+	// Global brake against distributed guessing. Clients that have logged
+	// in before are exempt, so an attacker cannot lock the admin out.
+	if _, ok := s.known[key]; !ok {
+		cut := now.Add(-10 * time.Minute)
+		n := 0
+		for _, t := range s.recent {
+			if t.After(cut) {
+				n++
+			}
+		}
+		if n >= 100 {
+			return nil, time.Minute, false
 		}
 	}
-	if n >= 100 {
-		return false, time.Minute
-	}
-	return true, 0
+	at.inflight = true
+	at.last = now
+	return func() {
+		s.mu.Lock()
+		at.inflight = false
+		s.mu.Unlock()
+	}, 0, true
 }
 
 func (s *authState) recordFailure(ip string) {
+	key := limitKey(ip)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	at := s.attempts[ip]
+	at := s.attempts[key]
 	if at == nil {
 		at = &attempt{}
-		s.attempts[ip] = at
+		s.attempts[key] = at
 	}
 	if now.Sub(at.last) > time.Hour {
 		at.fails = 0
@@ -258,17 +296,26 @@ func (s *authState) recordFailure(ip string) {
 }
 
 func (s *authState) recordSuccess(ip string) {
+	key := limitKey(ip)
 	s.mu.Lock()
-	delete(s.attempts, ip)
+	if at := s.attempts[key]; at != nil {
+		at.fails, at.lockedUntil = 0, time.Time{}
+	}
+	s.known[key] = time.Now()
 	s.mu.Unlock()
 }
 
 func (s *authState) pruneLimiter() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for ip, at := range s.attempts {
-		if time.Since(at.last) > 2*time.Hour {
-			delete(s.attempts, ip)
+	for k, at := range s.attempts {
+		if !at.inflight && time.Since(at.last) > 2*time.Hour {
+			delete(s.attempts, k)
+		}
+	}
+	for k, t := range s.known {
+		if time.Since(t) > 30*24*time.Hour {
+			delete(s.known, k)
 		}
 	}
 }

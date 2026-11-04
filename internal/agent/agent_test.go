@@ -2,9 +2,13 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +33,7 @@ func newTestAgent(t *testing.T) *Agent {
 type req struct {
 	method, path, body string
 	gateway, csrf      bool
+	local              bool // caller runs as the agent's own user
 	cookie, bearer     string
 }
 
@@ -52,6 +57,11 @@ func (a *Agent) do(t *testing.T, r req) (*httptest.ResponseRecorder, map[string]
 	if r.bearer != "" {
 		hr.Header.Set("Authorization", "Bearer "+r.bearer)
 	}
+	uid := 65532 // the web gateway's user
+	if r.local {
+		uid = os.Geteuid()
+	}
+	hr = hr.WithContext(context.WithValue(hr.Context(), peerKey{}, uid))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, hr)
 	var body map[string]any
@@ -67,9 +77,16 @@ func TestGatewayRequiresLogin(t *testing.T) {
 			t.Errorf("%s via gateway without login: got %d", p, w.Code)
 		}
 	}
-	// Local socket callers (the CLI) are trusted.
-	if w, _ := a.do(t, req{method: "GET", path: "/api/settings"}); w.Code != 200 {
+	// The CLI, running as the agent's user, is trusted.
+	if w, _ := a.do(t, req{method: "GET", path: "/api/settings", local: true}); w.Code != 200 {
 		t.Errorf("local caller: got %d", w.Code)
+	}
+	// The gateway's user is not trusted even if it omits the gateway header.
+	if w, _ := a.do(t, req{method: "GET", path: "/api/settings"}); w.Code != 401 {
+		t.Errorf("unprivileged socket caller without header: got %d", w.Code)
+	}
+	if w, _ := a.do(t, req{method: "POST", path: "/api/auth/password", body: `{"currentPassword":"","newPassword":"aaaaaaaaaaaaaaaa"}`, csrf: true}); w.Code != 401 {
+		t.Errorf("unprivileged caller changed the password: %d", w.Code)
 	}
 }
 
@@ -154,6 +171,38 @@ func TestLoginRateLimit(t *testing.T) {
 	}
 }
 
+func TestLimiterBlocksParallelAndGroupsIPv6(t *testing.T) {
+	s := newAuthState(nil)
+	done, _, ok := s.beginAttempt("2001:db8::1")
+	if !ok {
+		t.Fatal("first attempt refused")
+	}
+	// Same /64, different address: still the same client while one runs.
+	if _, _, ok := s.beginAttempt("2001:db8::ffff"); ok {
+		t.Fatal("parallel attempt from the same /64 allowed")
+	}
+	done()
+	if _, _, ok := s.beginAttempt("2001:db8::ffff"); !ok {
+		t.Fatal("attempt after the first finished refused")
+	}
+}
+
+func TestGlobalBrakeSparesKnownClients(t *testing.T) {
+	s := newAuthState(nil)
+	s.recordSuccess("198.51.100.1")
+	for i := 0; i < 120; i++ {
+		s.recordFailure("203.0.113." + strconv.Itoa(i%250))
+	}
+	if _, _, ok := s.beginAttempt("192.0.2.77"); ok {
+		t.Fatal("unknown client allowed during a distributed attack")
+	}
+	if done, _, ok := s.beginAttempt("198.51.100.1"); !ok {
+		t.Fatal("known admin client locked out by the global brake")
+	} else {
+		done()
+	}
+}
+
 func TestTokenScopes(t *testing.T) {
 	a := newTestAgent(t)
 	ctx := context.Background()
@@ -182,11 +231,35 @@ func TestTokenScopes(t *testing.T) {
 }
 
 func TestSubscriptionURLNotExposed(t *testing.T) {
-	a := newTestAgent(t)
-	if got := maskURL("https://panel.example.com/sub/S3CR3T-TOKEN-1234?x=1"); strings.Contains(got, "S3CR3T") || strings.Contains(got, "x=1") {
-		t.Fatalf("mask leaked secret: %s", got)
+	for _, u := range []string{"https://panel.example.com/sub/S3CR3T-TOKEN-1234?x=1", "https://panel.example.com/S3?token=S3CR3T"} {
+		if got := maskURL(u); strings.Contains(got, "S3") || strings.Contains(got, "x=1") || got != "https://panel.example.com/…" {
+			t.Fatalf("mask leaked secret: %s", got)
+		}
 	}
-	_ = a
+}
+
+func TestSubscriptionFetchRefusesHostServices(t *testing.T) {
+	for _, ip := range []string{"127.0.0.1", "::1", "169.254.169.254", "0.0.0.0", "fe80::1", "100.100.100.200", "224.0.0.1"} {
+		if !blockedFetchIP(net.ParseIP(ip)) {
+			t.Errorf("%s should be refused", ip)
+		}
+	}
+	for _, ip := range []string{"8.8.8.8", "192.168.1.10", "172.31.250.11"} {
+		if blockedFetchIP(net.ParseIP(ip)) {
+			t.Errorf("%s should be allowed", ip)
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	if _, err := fetchWith(context.Background(), directClient(), srv.URL); err == nil || !strings.Contains(err.Error(), "refusing") {
+		t.Fatalf("loopback fetch was not refused: %v", err)
+	}
+}
+
+func TestTitleSanitised(t *testing.T) {
+	if got := parseTitle("base64:" + base64.StdEncoding.EncodeToString([]byte("My]0;pwned Sub‮"))); got != "My]0;pwned Sub" {
+		t.Fatalf("got %q", got)
+	}
 }
 
 func TestTOTP(t *testing.T) {

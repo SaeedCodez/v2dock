@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -94,12 +95,20 @@ var publicPaths = map[string]bool{
 	"GET /api/healthz":     true,
 }
 
-// authenticate resolves the caller. Requests without the gateway header were
-// made over the unix socket by a local process (the CLI via docker exec) and
-// are trusted: anyone who can reach that socket is already root on the host.
+type peerKey struct{}
+
+// authenticate resolves the caller. A request is trusted without a login
+// only when the kernel reports that the process on the other end of the unix
+// socket runs as the agent's own user (root): that is the CLI via
+// `docker exec` into the agent, and whoever can do that already controls the
+// host. Everything else, including the web gateway (uid 65532) whether or not
+// it sets the gateway header, must authenticate, so a compromised gateway
+// cannot skip the login.
 func (a *Agent) authenticate(next http.Handler) http.Handler {
+	self := os.Geteuid()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get(wire.HeaderGateway) == "" {
+		uid, _ := r.Context().Value(peerKey{}).(int)
+		if r.Header.Get(wire.HeaderGateway) == "" && uid == self && r.Context().Value(peerKey{}) != nil {
 			ctx := context.WithValue(r.Context(), ctxKey{}, &principal{kind: "local", scope: scopeAdmin})
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
@@ -256,9 +265,11 @@ func (a *Agent) hSetup(w http.ResponseWriter, r *http.Request) error {
 		return conflict("already_setup", "a password is already set")
 	}
 	if p.kind != "local" {
-		if ok, wait := a.auth.allowAttempt(p.ip); !ok {
+		done, wait, ok := a.auth.beginAttempt(p.ip)
+		if !ok {
 			return &apiError{http.StatusTooManyRequests, "rate_limited", fmt.Sprintf("too many attempts; try again in %s", wait.Round(time.Second))}
 		}
+		defer done()
 		if !a.auth.checkSetupToken(in.SetupToken) {
 			a.auth.recordFailure(p.ip)
 			return &apiError{http.StatusForbidden, "bad_setup_token", "the setup token is wrong (it is printed in the agent's log)"}
@@ -289,9 +300,11 @@ func (a *Agent) hLogin(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	p := who(r)
-	if ok, wait := a.auth.allowAttempt(p.ip); !ok {
+	done, wait, allowed := a.auth.beginAttempt(p.ip)
+	if !allowed {
 		return &apiError{http.StatusTooManyRequests, "rate_limited", fmt.Sprintf("too many failed attempts; try again in %s", wait.Round(time.Second))}
 	}
+	defer done()
 	enc, ok, err := a.db.GetKV(r.Context(), kvPassword)
 	if err != nil {
 		return err
@@ -349,9 +362,11 @@ func (a *Agent) hChangePassword(w http.ResponseWriter, r *http.Request) error {
 	}
 	p := who(r)
 	if p.kind != "local" {
-		if ok, wait := a.auth.allowAttempt(p.ip); !ok {
+		done, wait, ok := a.auth.beginAttempt(p.ip)
+		if !ok {
 			return &apiError{http.StatusTooManyRequests, "rate_limited", fmt.Sprintf("try again in %s", wait.Round(time.Second))}
 		}
+		defer done()
 		enc, _, _ := a.db.GetKV(r.Context(), kvPassword)
 		if !a.auth.verifyPassword(enc, in.Current) {
 			a.auth.recordFailure(p.ip)
@@ -434,9 +449,11 @@ func (a *Agent) hTOTPDisable(w http.ResponseWriter, r *http.Request) error {
 	}
 	p := who(r)
 	if p.kind != "local" {
-		if ok, wait := a.auth.allowAttempt(p.ip); !ok {
+		done, wait, ok := a.auth.beginAttempt(p.ip)
+		if !ok {
 			return &apiError{http.StatusTooManyRequests, "rate_limited", fmt.Sprintf("try again in %s", wait.Round(time.Second))}
 		}
+		defer done()
 		enc, _, _ := a.db.GetKV(r.Context(), kvPassword)
 		if !a.auth.verifyPassword(enc, in.Password) || !a.auth.verifyTOTP(r.Context(), in.Code) {
 			a.auth.recordFailure(p.ip)
@@ -575,9 +592,10 @@ func (a *Agent) hDiagnostics(w http.ResponseWriter, r *http.Request) error {
 	} else {
 		out["docker"] = "ok"
 	}
-	s, plans, clients, err := a.desired(r.Context())
+	s, plans, fp, err := a.desired(r.Context())
 	if err == nil {
-		out["clients"] = clients
+		out["clients"] = fp.clients
+		out["blocked"] = fp.blocked
 		type rp struct {
 			Key  string       `json:"key"`
 			IPs  []netip.Addr `json:"ips"`
@@ -823,6 +841,8 @@ func (a *Agent) hCreateSub(w http.ResponseWriter, r *http.Request) error {
 	resp := map[string]any{"ok": true, "subscription": subView{got, maskURL(got.URL)}, "servers": n}
 	if ferr != nil {
 		resp["warning"] = ferr.Error()
+	} else if u.Scheme == "http" {
+		resp["warning"] = "this subscription uses plain http: anyone on the path can read or change it; prefer https"
 	}
 	writeJSON(w, 200, resp)
 	return nil

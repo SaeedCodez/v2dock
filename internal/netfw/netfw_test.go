@@ -14,8 +14,9 @@ func TestRender(t *testing.T) {
 		netip.MustParseAddr("10.0.1.2"),
 		netip.MustParseAddr("::1"),       // IPv6 ignored
 		netip.MustParseAddr("127.0.0.1"), // loopback ignored
-	})
-	if !strings.Contains(out, "elements = { 10.0.1.2, 172.18.0.5 }") {
+	}, []netip.Addr{netip.MustParseAddr("10.0.1.2")})
+	if !strings.Contains(out, "set clients {\n    type ipv4_addr\n    elements = { 10.0.1.2, 172.18.0.5 }") ||
+		!strings.Contains(out, "set blocked {\n    type ipv4_addr\n    elements = { 10.0.1.2 }") {
 		t.Fatalf("clients set wrong:\n%s", out)
 	}
 	if strings.Contains(out, "127.0.0.1 }") || strings.Contains(out, "::1") {
@@ -29,12 +30,17 @@ func TestRender(t *testing.T) {
 		"fib daddr type local return",
 		"meta l4proto tcp redirect to :12701",
 		"th dport { 12701, 12702 } ct status & dnat != dnat drop",
+		// Over-quota "block" containers lose non-DNS UDP too.
+		"ip saddr != @blocked return\n    ip daddr @skip return\n    meta l4proto udp udp dport != 53 drop",
+		// IPv6 never reaches the dual-stack listeners.
+		"table ip6 v2dock {\n  chain input {\n    type filter hook input priority filter - 10; policy accept;\n    iifname != \"lo\" meta l4proto { tcp, udp } th dport { 12701, 12702 } drop",
+		"add table ip6 v2dock\ndelete table ip6 v2dock\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
 		}
 	}
-	if strings.Contains(f.Render(nil), "elements = {  }") {
+	if strings.Contains(f.Render(nil, nil), "elements = {  }") {
 		t.Fatal("empty set must omit elements")
 	}
 }

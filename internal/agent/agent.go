@@ -149,6 +149,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      120 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
+		ConnContext: func(c context.Context, conn net.Conn) context.Context {
+			return context.WithValue(c, peerKey{}, peerUID(conn))
+		},
 	}
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -253,14 +256,20 @@ func (a *Agent) reconcileLoop(ctx context.Context) {
 }
 
 // desired computes the plan for the current settings, routes and containers.
-func (a *Agent) desired(ctx context.Context) (store.Settings, []xcore.RoutePlan, []netip.Addr, error) {
+type fwPlan struct {
+	clients []netip.Addr // redirected into the proxy
+	blocked []netip.Addr // over quota with action "block"
+}
+
+func (a *Agent) desired(ctx context.Context) (store.Settings, []xcore.RoutePlan, fwPlan, error) {
+	var fp fwPlan
 	s, err := a.db.LoadSettings(ctx)
 	if err != nil {
-		return s, nil, nil, err
+		return s, nil, fp, err
 	}
 	routes, err := a.db.ListRoutes(ctx)
 	if err != nil {
-		return s, nil, nil, err
+		return s, nil, fp, err
 	}
 	a.mu.Lock()
 	containers := a.containers
@@ -274,7 +283,6 @@ func (a *Agent) desired(ctx context.Context) (store.Settings, []xcore.RoutePlan,
 		byKey[k] = append(byKey[k], c.IPv4s()...)
 	}
 	var plans []xcore.RoutePlan
-	var clients []netip.Addr
 	for _, r := range routes {
 		ips := byKey[r.Key]
 		sort.Slice(ips, func(i, j int) bool { return ips[i].Less(ips[j]) })
@@ -289,10 +297,13 @@ func (a *Agent) desired(ctx context.Context) (store.Settings, []xcore.RoutePlan,
 		plans = append(plans, xcore.RoutePlan{Key: r.Key, IPs: ips, Mode: mode})
 		if mode != xcore.ModeDirect {
 			// Containers over a "direct" quota bypass the proxy entirely.
-			clients = append(clients, ips...)
+			fp.clients = append(fp.clients, ips...)
+		}
+		if mode == xcore.ModeBlock {
+			fp.blocked = append(fp.blocked, ips...)
 		}
 	}
-	return s, plans, clients, nil
+	return s, plans, fp, nil
 }
 
 // Reconcile makes the running proxy and firewall match the desired state.
@@ -300,7 +311,7 @@ func (a *Agent) Reconcile(ctx context.Context) error {
 	a.reconcileMu.Lock()
 	defer a.reconcileMu.Unlock()
 
-	s, plans, clients, err := a.desired(ctx)
+	s, plans, fp, err := a.desired(ctx)
 	if err != nil {
 		a.setRunError(err.Error())
 		return err
@@ -325,8 +336,8 @@ func (a *Agent) Reconcile(ctx context.Context) error {
 		a.stopLocked(ctx)
 		return err
 	}
-	clientsJSON, _ := json.Marshal(clients)
-	sum := sha256.Sum256(append(cfg, clientsJSON...))
+	fpJSON, _ := json.Marshal([][]netip.Addr{fp.clients, fp.blocked})
+	sum := sha256.Sum256(append(cfg, fpJSON...))
 	hash := hex.EncodeToString(sum[:])
 
 	a.mu.Lock()
@@ -337,7 +348,7 @@ func (a *Agent) Reconcile(ctx context.Context) error {
 			// Re-assert rules in case something on the host flushed them.
 			if st := a.fw.Status(ctx); !st.Table {
 				slog.Warn("firewall rules were missing; reinstalling")
-				if err := a.fw.Apply(ctx, clients); err != nil {
+				if err := a.fw.Apply(ctx, fp.clients, fp.blocked); err != nil {
 					a.setFwError(err.Error())
 				}
 			}
@@ -355,7 +366,7 @@ func (a *Agent) Reconcile(ctx context.Context) error {
 	// Rules first: they include the drop rule that keeps the proxy port
 	// closed to everything except diverted packets.
 	if !a.cfg.NoFirewall {
-		if err := a.fw.Apply(ctx, clients); err != nil {
+		if err := a.fw.Apply(ctx, fp.clients, fp.blocked); err != nil {
 			slog.Error("applying firewall rules", "err", err)
 			a.setFwError(err.Error())
 			a.mu.Lock()
@@ -391,7 +402,7 @@ func (a *Agent) Reconcile(ctx context.Context) error {
 	a.mu.Unlock()
 
 	a.setFwError("")
-	slog.Info("proxy applied", "server", s.ActiveName, "routes", len(plans), "clients", len(clients), "bypassIran", s.BypassIran)
+	slog.Info("proxy applied", "server", s.ActiveName, "routes", len(plans), "clients", len(fp.clients), "bypassIran", s.BypassIran)
 	return nil
 }
 
