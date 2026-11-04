@@ -7,7 +7,7 @@
 #          fixed read-only allowlist (list containers, stats, events) and
 #          refuses everything else: no inspect (environment secrets), no exec,
 #          no start/stop. No network, no capabilities.
-#   agent  runs Xray and the nftables TPROXY rules. Host network + NET_ADMIN
+#   agent  runs Xray and the nftables redirect rules. Host network + NET_ADMIN
 #          are required to steer other containers' traffic; it opens no TCP
 #          port to the outside, only a unix socket shared with `web`.
 #   web    the UI and API gateway. Unprivileged user, no capabilities, no
