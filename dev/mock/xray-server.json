@@ -1,0 +1,14 @@
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    { "tag": "vless", "port": 10001, "protocol": "vless",
+      "settings": { "clients": [ { "id": "6f1f2a9e-3b4c-4d5e-8f70-112233445566" } ], "decryption": "none" },
+      "streamSettings": { "network": "raw" } },
+    { "tag": "vmess", "port": 10002, "protocol": "vmess",
+      "settings": { "clients": [ { "id": "6f1f2a9e-3b4c-4d5e-8f70-112233445566" } ] },
+      "streamSettings": { "network": "ws", "wsSettings": { "path": "/vm" } } },
+    { "tag": "ss", "port": 10003, "protocol": "shadowsocks",
+      "settings": { "method": "2022-blake3-aes-128-gcm", "password": "+ZkeCMvMMHeKkNoXq9F2bQ==", "network": "tcp,udp" } }
+  ],
+  "outbounds": [ { "protocol": "freedom" } ]
+}

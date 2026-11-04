@@ -1,0 +1,19 @@
+# Network-check test site. Merge it with the main stack from the repository
+# root (paths here are relative to the root, like the main compose file):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml -f testsite/docker-compose.yml up -d --build
+#
+# Then open http://127.0.0.1:8089 and select the `testsite` container in v2dock.
+# It joins the project's default bridge network; never use network_mode: host
+# here, or v2dock could not tell its traffic apart from the host's.
+
+services:
+  testsite:
+    build: ./testsite
+    image: v2dock-testsite:local
+    ports:
+      - "127.0.0.1:8089:8080"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped

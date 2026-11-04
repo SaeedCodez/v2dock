@@ -1,0 +1,20 @@
+# Local development / testing: build the image from source and publish the
+# UI on http://localhost:8088 (bound to 127.0.0.1 only).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+#
+# Add the test site too (a page that checks Iranian and filtered services from
+# inside its own container):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml -f testsite/docker-compose.yml up -d --build
+
+services:
+  guard:
+    image: v2dock:local
+    build: .
+  agent:
+    image: v2dock:local
+  web:
+    image: v2dock:local
+    ports:
+      - "127.0.0.1:8088:8080"

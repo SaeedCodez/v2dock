@@ -1,0 +1,111 @@
+# v2dock — route chosen Docker containers through V2Ray/Xray.
+#
+# Works as-is on Coolify (Docker Compose build pack from this repository) and
+# with plain `docker compose up -d`.
+#
+#   guard  the only process that touches /var/run/docker.sock. It forwards a
+#          fixed read-only allowlist (list containers, stats, events) and
+#          refuses everything else: no inspect (environment secrets), no exec,
+#          no start/stop. No network, no capabilities.
+#   agent  runs Xray and the nftables TPROXY rules. Host network + NET_ADMIN
+#          are required to steer other containers' traffic; it opens no TCP
+#          port to the outside, only a unix socket shared with `web`.
+#   web    the UI and API gateway. Unprivileged user, no capabilities, no
+#          Docker access. This is the only service you expose (Coolify puts
+#          the domain on it through SERVICE_FQDN_WEB_8080).
+#
+# First login: on Coolify, the password is SERVICE_PASSWORD_ADMIN (generated;
+# see the resource's Environment Variables). Elsewhere, set
+# V2DOCK_ADMIN_PASSWORD in .env, or read the one-time setup token from the
+# agent's log:  docker compose logs agent | grep setupToken
+
+services:
+  guard:
+    image: ghcr.io/saeedcodez/v2dock:${V2DOCK_VERSION:-latest}
+    command: ["guard"]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - docker-api:/run/v2dock/docker
+    labels:
+      io.v2dock.role: guard
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  agent:
+    image: ghcr.io/saeedcodez/v2dock:${V2DOCK_VERSION:-latest}
+    command: ["agent"]
+    network_mode: host
+    # Group 65532 owns the API socket so the unprivileged web service can use it.
+    user: "0:65532"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+    environment:
+      V2DOCK_ADMIN_PASSWORD: ${SERVICE_PASSWORD_ADMIN:-${V2DOCK_ADMIN_PASSWORD:-}}
+      V2DOCK_SETUP_TOKEN: ${V2DOCK_SETUP_TOKEN:-}
+      V2DOCK_TPROXY_PORT: ${V2DOCK_TPROXY_PORT:-12701}
+      V2DOCK_SOCKET_GID: "65532"
+      # Daily / weekly / monthly quotas reset at midnight in this time zone.
+      TZ: ${TZ:-Asia/Tehran}
+    volumes:
+      - data:/data
+      - agent-api:/run/v2dock/agent
+      - docker-api:/run/v2dock/docker
+    depends_on:
+      - guard
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "v2dock", "--json", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    labels:
+      io.v2dock.role: agent
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  web:
+    image: ghcr.io/saeedcodez/v2dock:${V2DOCK_VERSION:-latest}
+    command: ["web"]
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      SERVICE_FQDN_WEB_8080:
+      V2DOCK_LISTEN: ":8080"
+    expose:
+      - "8080"
+    volumes:
+      - agent-api:/run/v2dock/agent
+    depends_on:
+      - agent
+    healthcheck:
+      test: ["CMD", "v2dock", "healthcheck"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 15s
+    labels:
+      io.v2dock.role: web
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  data:
+  agent-api:
+  docker-api:

@@ -1,0 +1,7 @@
+.git
+ui/node_modules
+dev/assets
+dev/mock/runtime
+*.db
+.env
+docs/screenshots

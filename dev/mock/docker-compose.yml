@@ -1,0 +1,30 @@
+# A fake "foreign" V2Ray server and a subscription URL, for testing v2dock
+# locally. Development only: the credentials in this folder are public.
+#
+#   docker compose -f dev/mock/docker-compose.yml up -d
+#   subscription URL (reachable from the v2dock agent): http://172.31.250.11/sub.txt
+#
+# 172.31.250.99 in the subscription is deliberately dead (failover tests).
+name: v2dock-mock
+services:
+  xray:
+    image: ghcr.io/xtls/xray-core:latest
+    command: ["run", "-c", "/etc/xray/config.json"]
+    volumes:
+      - ./xray-server.json:/etc/xray/config.json:ro
+    networks:
+      mock: { ipv4_address: 172.31.250.10 }
+    restart: unless-stopped
+  sub:
+    image: busybox:1.37
+    command: ["httpd", "-f", "-p", "80", "-h", "/www"]
+    volumes:
+      - ./www:/www:ro
+    networks:
+      mock: { ipv4_address: 172.31.250.11 }
+    restart: unless-stopped
+networks:
+  mock:
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24

@@ -1,0 +1,20 @@
+# build output
+/v2dock
+/bin/
+/dist/
+ui/node_modules/
+ui/.vite/
+
+# local data / secrets
+.env
+*.db
+*.db-wal
+*.db-shm
+/data/
+
+# downloaded test assets
+/dev/assets/
+/dev/mock/runtime/
+
+.DS_Store
+/dev/prebuilt/ctx/

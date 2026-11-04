@@ -1,0 +1,253 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+/* Self-hosted so the app never reaches out to a font CDN: it often runs on a
+ * private network, and the build is embedded in the Go binary anyway.
+ * Geist sets the interface; JetBrains Mono sets addresses, ids and keys. */
+@import "@fontsource-variable/geist/wght.css";
+
+@import "@fontsource-variable/jetbrains-mono/wght.css";
+
+/* Dark mode is driven by a class on <html>, set before first paint in index.html. */
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * The palette has three layers, and each colour means one thing:
+ *
+ *   - Neutrals: a cool grey ramp for every surface and for text.
+ *   - Status: emerald = succeeded, cobalt = running (the app at work),
+ *     amber = warning / overdue, crimson = failed. Nothing else uses them.
+ *   - Kinds: every kind of thing the app manages has its own hue, used on its
+ *     icon tile wherever it appears: jobs are violet, repositories cyan,
+ *     sources (folders and databases) fuchsia.
+ *
+ * Cobalt doubles as the brand: primary buttons, links, focus and the active
+ * navigation item are all "the app doing something for you".
+ *
+ * Light values are dark enough to read as text on white; dark values are lifted
+ * so they read on near-black without glowing.
+ */
+:root {
+  --radius: 0.75rem;
+
+  --background: oklch(0.982 0.003 265);
+  --foreground: oklch(0.2 0.018 268);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.018 268);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0.018 268);
+  --primary: oklch(0.53 0.215 268);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.955 0.006 265);
+  --secondary-foreground: oklch(0.22 0.018 268);
+  --muted: oklch(0.96 0.005 265);
+  --muted-foreground: oklch(0.5 0.018 268);
+  --accent: oklch(0.95 0.008 268);
+  --accent-foreground: oklch(0.2 0.018 268);
+  --destructive: oklch(0.56 0.205 24);
+  --destructive-foreground: oklch(0.99 0 0);
+  --border: oklch(0.915 0.007 265);
+  --input: oklch(0.87 0.009 265);
+  --ring: oklch(0.53 0.215 268);
+
+  --success: oklch(0.55 0.135 156);
+  --warning: oklch(0.6 0.14 62);
+  --info: oklch(0.53 0.215 268);
+  --running: oklch(0.53 0.215 268);
+
+  --violet: oklch(0.54 0.21 295);
+  --cyan: oklch(0.58 0.12 220);
+  --fuchsia: oklch(0.56 0.2 345);
+
+  --surface: oklch(0.975 0.004 265);
+  --log-bg: oklch(0.975 0.004 265);
+  --sidebar: oklch(0.975 0.004 265);
+
+  /* Chart series: categorical slots 1-2 (blue, orange), validated for CVD. */
+  --series-vpn: #2a78d6;
+  --series-direct: #eb6834;
+  --chart-grid: oklch(0.93 0.006 265);
+}
+
+.dark {
+  --background: oklch(0.155 0.008 268);
+  --foreground: oklch(0.955 0.005 268);
+  --card: oklch(0.19 0.01 268);
+  --card-foreground: oklch(0.955 0.005 268);
+  --popover: oklch(0.215 0.011 268);
+  --popover-foreground: oklch(0.955 0.005 268);
+  --primary: oklch(0.67 0.17 270);
+  --primary-foreground: oklch(0.15 0.02 270);
+  --secondary: oklch(0.245 0.012 268);
+  --secondary-foreground: oklch(0.955 0.005 268);
+  --muted: oklch(0.225 0.011 268);
+  --muted-foreground: oklch(0.68 0.015 268);
+  --accent: oklch(0.255 0.014 268);
+  --accent-foreground: oklch(0.97 0.004 268);
+  --destructive: oklch(0.7 0.18 22);
+  --destructive-foreground: oklch(0.16 0.03 22);
+  --border: oklch(0.27 0.012 268);
+  --input: oklch(0.33 0.014 268);
+  --ring: oklch(0.67 0.17 270);
+
+  --success: oklch(0.77 0.15 158);
+  --warning: oklch(0.82 0.14 78);
+  --info: oklch(0.67 0.17 270);
+  --running: oklch(0.7 0.16 270);
+
+  --violet: oklch(0.72 0.16 295);
+  --cyan: oklch(0.78 0.12 215);
+  --fuchsia: oklch(0.74 0.17 345);
+
+  --surface: oklch(0.175 0.009 268);
+  --log-bg: oklch(0.135 0.007 268);
+  --sidebar: oklch(0.135 0.007 268);
+
+  --series-vpn: #3987e5;
+  --series-direct: #d95926;
+  --chart-grid: oklch(0.26 0.012 268);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-running: var(--running);
+  --color-violet: var(--violet);
+  --color-cyan: var(--cyan);
+  --color-fuchsia: var(--fuchsia);
+  --color-surface: var(--surface);
+  --color-log-bg: var(--log-bg);
+  --color-sidebar: var(--sidebar);
+  --color-series-vpn: var(--series-vpn);
+  --color-series-direct: var(--series-direct);
+  --color-chart-grid: var(--chart-grid);
+
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 3px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 2px);
+  --radius-2xl: calc(var(--radius) + 6px);
+
+  --font-display: "Geist Variable", ui-sans-serif, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-sans: "Geist Variable", ui-sans-serif, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+    Consolas, monospace;
+}
+
+/*
+ * The type scale is one notch larger than Tailwind's default, so the whole UI
+ * reads comfortably: body copy is 15px, secondary text 14px, the smallest
+ * labels 13px. Headings use .display for the Geist display face.
+ */
+@theme {
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.25rem;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.375rem;
+  --text-base: 0.9375rem;
+  --text-base--line-height: 1.5rem;
+  --text-md: 1.0625rem;
+  --text-md--line-height: 1.5rem;
+  --text-lg: 1.25rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl: 1.5rem;
+  --text-xl--line-height: 2rem;
+  --text-2xl: 1.875rem;
+  --text-2xl--line-height: 2.25rem;
+  --text-3xl: 2.375rem;
+  --text-3xl--line-height: 2.75rem;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html {
+    scrollbar-gutter: stable;
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-size: var(--text-base);
+    line-height: var(--text-base--line-height);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  /* Numbers that update in place (progress, sizes, durations) must not jitter. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background-color: color-mix(in oklch, var(--primary) 22%, transparent);
+  }
+}
+
+/* Sliding sheen for work that has started but reported no percentage yet. */
+@keyframes progress-sweep {
+  0% {
+    left: -35%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+@layer utilities {
+  /* Thin, unobtrusive scrollbars for the log and other scroll panes. */
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--input) transparent;
+  }
+  .scroll-thin::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .scroll-thin::-webkit-scrollbar-thumb {
+    background-color: var(--input);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  /* The display voice: Geist, set a little tight. Used for page titles, card
+     titles and the big numbers, nowhere else. */
+  .display {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
