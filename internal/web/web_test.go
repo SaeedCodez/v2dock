@@ -51,9 +51,26 @@ func TestSameOrigin(t *testing.T) {
 		if c.site != "" {
 			r.Header.Set("Sec-Fetch-Site", c.site)
 		}
-		if got := sameOrigin(r); got != c.ok {
+		if got := gw().sameOrigin(r); got != c.ok {
 			t.Errorf("%+v: got %v", c, got)
 		}
+	}
+}
+
+func TestForwardedHostOnlyFromProxy(t *testing.T) {
+	g := gw()
+	r := httptest.NewRequest("POST", "http://v2dock.example/api/x", nil)
+	r.RemoteAddr = "198.51.100.9:4000" // not a proxy
+	r.Header.Set("Origin", "https://evil.example")
+	r.Header.Set("X-Forwarded-Host", "evil.example")
+	if g.sameOrigin(r) {
+		t.Fatal("untrusted X-Forwarded-Host accepted")
+	}
+	r.RemoteAddr = "172.18.0.2:4000" // Traefik
+	r.Header.Set("Origin", "https://v2dock.example")
+	r.Header.Set("X-Forwarded-Host", "v2dock.example")
+	if !g.sameOrigin(r) {
+		t.Fatal("proxied same-origin request refused")
 	}
 }
 

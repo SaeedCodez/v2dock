@@ -3,7 +3,7 @@
 **Route chosen Docker containers through V2Ray/Xray — keep your servers
 connected to the international internet during shutdowns.**
 
-[فارسی](#فارسی) · [Security model](docs/security.md) · [CLI](docs/cli.md)
+[فارسی](#فارسی) · [Security model](docs/security.md) · [CLI](docs/cli.md) · [Coolify](docs/coolify.md)
 
 v2dock runs next to your other containers (plain Docker or
 [Coolify](https://coolify.io)). You add your V2Ray subscriptions, pick a
@@ -80,7 +80,8 @@ the rules are removed when v2dock stops. UDP other than DNS is not proxied.
    `SERVICE_PASSWORD_ADMIN` (Coolify generates it).
 
 The agent uses `network_mode: host`; Coolify leaves such services out of its
-networks and proxy, which is expected — only `web` is exposed.
+networks and proxy, which is expected — only `web` is exposed. Details:
+[docs/coolify.md](docs/coolify.md).
 
 ### Docker Compose
 

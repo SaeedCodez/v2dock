@@ -50,7 +50,10 @@ services:
     tmpfs:
       - /tmp
     environment:
-      V2DOCK_ADMIN_PASSWORD: ${SERVICE_PASSWORD_ADMIN:-${V2DOCK_ADMIN_PASSWORD:-}}
+      # First admin password: Coolify generates SERVICE_PASSWORD_ADMIN; with
+      # plain Docker set V2DOCK_ADMIN_PASSWORD in .env (or use the setup token).
+      SERVICE_PASSWORD_ADMIN: ${SERVICE_PASSWORD_ADMIN:-}
+      V2DOCK_ADMIN_PASSWORD: ${V2DOCK_ADMIN_PASSWORD:-}
       V2DOCK_SETUP_TOKEN: ${V2DOCK_SETUP_TOKEN:-}
       V2DOCK_TPROXY_PORT: ${V2DOCK_TPROXY_PORT:-12701}
       V2DOCK_SOCKET_GID: "65532"

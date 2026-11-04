@@ -32,6 +32,15 @@ func env(key, def string) string {
 	return def
 }
 
+func firstEnv(keys ...string) string {
+	for _, k := range keys {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func envInt(key string, def int) int {
 	if v, err := strconv.Atoi(os.Getenv(key)); err == nil {
 		return v
@@ -93,10 +102,11 @@ func runDaemon(ctx context.Context, which string) error {
 			AssetDir:      env("V2DOCK_ASSETS", "/usr/share/v2dock"),
 			TProxyPort:    envInt("V2DOCK_TPROXY_PORT", 12701),
 			SetupToken:    os.Getenv("V2DOCK_SETUP_TOKEN"),
-			AdminPassword: os.Getenv("V2DOCK_ADMIN_PASSWORD"),
+			AdminPassword: firstEnv("V2DOCK_ADMIN_PASSWORD", "SERVICE_PASSWORD_ADMIN"),
 			NoFirewall:    env("V2DOCK_NO_FIREWALL", "") == "1",
 		}
 		os.Unsetenv("V2DOCK_ADMIN_PASSWORD")
+		os.Unsetenv("SERVICE_PASSWORD_ADMIN")
 		os.Unsetenv("V2DOCK_SETUP_TOKEN")
 		a, err := agent.New(cfg)
 		if err != nil {

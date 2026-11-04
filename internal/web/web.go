@@ -164,7 +164,8 @@ func (g *gateway) securityHeaders(w http.ResponseWriter, r *http.Request) {
 }
 
 // sameOrigin rejects state-changing requests initiated by another site.
-func sameOrigin(r *http.Request) bool {
+// X-Forwarded-Host is honoured only from a trusted proxy.
+func (g *gateway) sameOrigin(r *http.Request) bool {
 	if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
 		return true
 	}
@@ -180,7 +181,7 @@ func sameOrigin(r *http.Request) bool {
 		return false
 	}
 	host := r.Host
-	if fh := r.Header.Get("X-Forwarded-Host"); fh != "" {
+	if fh := r.Header.Get("X-Forwarded-Host"); fh != "" && g.trusted(remoteAddr(r)) {
 		host = fh
 	}
 	return strings.EqualFold(u.Host, host)
@@ -197,7 +198,7 @@ func (g *gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-		if !sameOrigin(r) {
+		if !g.sameOrigin(r) {
 			http.Error(w, `{"ok":false,"code":"cross_origin","error":"cross-origin request refused"}`, http.StatusForbidden)
 			return
 		}

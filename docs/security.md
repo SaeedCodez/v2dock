@@ -63,7 +63,9 @@ capabilities and no access to Docker or the host network.
 - **First run** cannot be hijacked: either the password comes from
   `SERVICE_PASSWORD_ADMIN` / `V2DOCK_ADMIN_PASSWORD`, or the agent prints a
   one-time setup token to its log and the setup page requires it.
-  The agent removes these variables from its environment after reading them.
+  The variable is read only while no password exists, so changing the
+  password in Settings afterwards makes it irrelevant; the agent also clears
+  it from its own environment after reading it.
 - **Login throttling** per client IP (5 failures → 1 min lock, doubling up to
   an hour) plus a global brake against distributed guessing. Failed logins are
   written to the activity log with the client IP.
