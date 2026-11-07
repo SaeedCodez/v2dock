@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/SaeedCodez/v2dock/internal/docker"
+	"github.com/SaeedCodez/v2dock/internal/store"
 	"github.com/SaeedCodez/v2dock/internal/wire"
 )
 
@@ -323,5 +324,77 @@ func TestPeriodStart(t *testing.T) {
 	}
 	if got := time.Unix(periodStart("monthly", ts, 0), 0); got.Day() != 1 {
 		t.Fatalf("monthly %v", got)
+	}
+}
+
+func coolifyApp(uuid, ts string) docker.Container {
+	return docker.Container{
+		Name: uuid + "-" + ts,
+		Labels: map[string]string{
+			"com.docker.compose.project": uuid,
+			"com.docker.compose.service": uuid + "-" + ts,
+			"coolify.type":               "application",
+			"coolify.applicationUuid":    uuid,
+			"coolify.pullRequestId":      "0",
+		},
+	}
+}
+
+func TestCoolifyAppKeyIsStableAcrossDeploys(t *testing.T) {
+	a, b := coolifyApp("ab59unrtws", "20261107T123316"), coolifyApp("ab59unrtws", "20261107T124001")
+	if ContainerKey(a) != "coolify:app/ab59unrtws" || ContainerKey(a) != ContainerKey(b) || !validKey(ContainerKey(a)) {
+		t.Fatalf("keys %q %q", ContainerKey(a), ContainerKey(b))
+	}
+	if legacyKey(a) == legacyKey(b) {
+		t.Fatal("test premise: the compose key does change per deploy")
+	}
+	// Pull-request previews and Coolify services keep their compose keys.
+	pr := coolifyApp("ab59unrtws", "x")
+	pr.Labels["coolify.pullRequestId"] = "12"
+	svc := docker.Container{Name: "n", Labels: map[string]string{"com.docker.compose.project": "svc1", "com.docker.compose.service": "web", "coolify.type": "service"}}
+	if !strings.HasPrefix(ContainerKey(pr), "compose:") || ContainerKey(svc) != "compose:svc1/web" {
+		t.Fatalf("pr %q svc %q", ContainerKey(pr), ContainerKey(svc))
+	}
+	bad := coolifyApp("a/../b", "x")
+	if strings.HasPrefix(ContainerKey(bad), "coolify:") {
+		t.Fatalf("unsafe uuid accepted: %q", ContainerKey(bad))
+	}
+}
+
+func TestMigrateAppKeysKeepsTheNewestOldRoute(t *testing.T) {
+	a := newTestAgent(t)
+	ctx := context.Background()
+	for i, k := range []string{
+		"compose:ab59unrtws/ab59unrtws-20261107T120000", // oldest
+		"compose:ab59unrtws/ab59unrtws-20261107T123316", // newest
+		"compose:other/other-20261107T120000",           // another app: untouched
+	} {
+		if err := a.db.UpsertRoute(ctx, store.Route{Key: k, Label: k, QuotaPeriod: "monthly", QuotaAction: "block"}, 0); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.db.ExecContext(ctx, `UPDATE routes SET created_at = ? WHERE key = ?`, 1000+i, k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	running := []docker.Container{coolifyApp("ab59unrtws", "20261107T124001")}
+	a.migrateAppKeys(ctx, running)
+
+	if _, err := a.db.GetRoute(ctx, "coolify:app/ab59unrtws"); err != nil {
+		t.Fatalf("stable route missing: %v", err)
+	}
+	if _, err := a.db.GetRoute(ctx, "compose:ab59unrtws/ab59unrtws-20261107T123316"); err == nil {
+		t.Fatal("newest old route should have been renamed")
+	}
+	if _, err := a.db.GetRoute(ctx, "compose:ab59unrtws/ab59unrtws-20261107T120000"); err != nil {
+		t.Fatal("older ghost route must be left alone")
+	}
+	if _, err := a.db.GetRoute(ctx, "compose:other/other-20261107T120000"); err != nil {
+		t.Fatal("other apps must not be touched")
+	}
+	// Running it again is a no-op.
+	a.migrateAppKeys(ctx, running)
+	rs, _ := a.db.ListRoutes(ctx)
+	if len(rs) != 3 {
+		t.Fatalf("routes %d", len(rs))
 	}
 }

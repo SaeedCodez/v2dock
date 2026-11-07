@@ -54,8 +54,10 @@ Conventions:
 - Every state change goes through `Agent.Reconcile`, which is serialised and
   idempotent (it hashes the Xray config + client IPs and does nothing when
   unchanged). Never start Xray or touch nftables anywhere else.
-- Container identity is `ContainerKey` (compose project/service, else name),
-  stable across Coolify redeploys.
+- Container identity is `ContainerKey`: `coolify:app/<application uuid>` for Coolify
+  applications (their compose service is named `<uuid>-<deploy timestamp>`, so the
+  compose key changes on every deploy), else compose project/service, else name.
+  `migrateAppKeys` moves routes saved under the old per-deploy key to the stable one.
 - New API endpoint → handler in `internal/agent/api.go`, CLI command in
   `internal/cli/cli.go`, line in `docs/cli.md`, UI helper in `ui/src/lib/api.js`.
 - Security-sensitive changes (auth, gateway, guard allowlist, firewall

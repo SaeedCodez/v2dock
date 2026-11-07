@@ -469,6 +469,34 @@ func (db *DB) UpsertRoute(ctx context.Context, r Route, periodStart int64) error
 	return err
 }
 
+// RenameRoute moves a route (and its usage history) to a new key. It does
+// nothing, and reports false, when the new key already exists or the old one
+// does not.
+func (db *DB) RenameRoute(ctx context.Context, from, to string) (bool, error) {
+	if from == to {
+		return false, nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE routes SET key = ? WHERE key = ? AND NOT EXISTS (SELECT 1 FROM routes WHERE key = ?)`, to, from, to)
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, nil
+	}
+	for _, table := range []string{"usage_min", "usage_hour"} {
+		// OR IGNORE: if both keys already have a sample for the same time bucket, keep the new key's.
+		if _, err := tx.ExecContext(ctx, `UPDATE OR IGNORE `+table+` SET key = ? WHERE key = ?`, to, from); err != nil {
+			return false, err
+		}
+	}
+	return true, tx.Commit()
+}
+
 func (db *DB) DeleteRoute(ctx context.Context, key string) error {
 	res, err := db.ExecContext(ctx, `DELETE FROM routes WHERE key = ?`, key)
 	if err != nil {

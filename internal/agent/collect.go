@@ -17,9 +17,42 @@ import (
 const RoleLabel = "io.v2dock.role"
 
 // ContainerKey is a container's stable identity: it survives redeploys, so a
-// Coolify app keeps its routing and quota after every deployment (Coolify
-// runs every resource as a compose project with a stable project/service).
+// Coolify app keeps its routing and quota after every deployment.
+//
+// Coolify apps are identified by their application uuid. Their compose
+// service is named after the container ("<uuid>-<deploy timestamp>"), so the
+// compose key changes on every deploy and must not be used for them. Coolify
+// services (compose stacks) and other compose projects keep stable
+// project/service names, so those use the compose key.
 func ContainerKey(c docker.Container) string {
+	if k := coolifyAppKey(c); k != "" {
+		return k
+	}
+	return legacyKey(c)
+}
+
+var idPattern = regexp.MustCompile(`^[A-Za-z0-9]{1,64}$`)
+
+// coolifyAppKey is "coolify:app/<application uuid>" for a Coolify application
+// container, or "" for anything else. Pull-request previews are separate
+// deployments of the same app, so they keep their own (compose) key.
+func coolifyAppKey(c docker.Container) string {
+	if c.Labels["coolify.type"] != "application" {
+		return ""
+	}
+	if pr := c.Labels["coolify.pullRequestId"]; pr != "" && pr != "0" {
+		return ""
+	}
+	id := c.Labels["coolify.applicationUuid"]
+	if !idPattern.MatchString(id) {
+		return ""
+	}
+	return "coolify:app/" + id
+}
+
+// legacyKey is the compose/name key v2dock used for every container before
+// Coolify apps got their own key.
+func legacyKey(c docker.Container) string {
 	p, s := c.Labels["com.docker.compose.project"], c.Labels["com.docker.compose.service"]
 	if p != "" && s != "" {
 		return "compose:" + p + "/" + s
@@ -27,7 +60,13 @@ func ContainerKey(c docker.Container) string {
 	return "name:" + c.Name
 }
 
-var keyPattern = regexp.MustCompile(`^(compose|name):[A-Za-z0-9][A-Za-z0-9_.\-/]{0,200}$`)
+// isLegacyAppKey reports whether key is a pre-fix key of the Coolify app with
+// this uuid ("compose:<uuid>/<uuid>-<timestamp>" or "name:<uuid>-<timestamp>").
+func isLegacyAppKey(key, appUUID string) bool {
+	return strings.HasPrefix(key, "compose:"+appUUID+"/") || strings.HasPrefix(key, "name:"+appUUID+"-")
+}
+
+var keyPattern = regexp.MustCompile(`^(compose|name|coolify):[A-Za-z0-9][A-Za-z0-9_.\-/]{0,200}$`)
 
 func validKey(k string) bool { return keyPattern.MatchString(k) }
 

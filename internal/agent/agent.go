@@ -255,6 +255,41 @@ func (a *Agent) reconcileLoop(ctx context.Context) {
 	}
 }
 
+// migrateAppKeys moves routes saved under the old per-deploy key of a Coolify
+// app ("compose:<uuid>/<uuid>-<timestamp>") to the app's stable key, so VPN
+// selections made before the fix, and the ones lost by later deploys, come back.
+// When several old keys exist for one app (one per deploy it survived), the
+// newest wins.
+func (a *Agent) migrateAppKeys(ctx context.Context, containers []docker.Container) {
+	routes, err := a.db.ListRoutes(ctx)
+	if err != nil || len(routes) == 0 {
+		return
+	}
+	for _, c := range containers {
+		nk := coolifyAppKey(c)
+		if nk == "" {
+			continue
+		}
+		uuid := c.Labels["coolify.applicationUuid"]
+		from, have := "", false
+		for _, r := range routes { // ordered by created_at: the last match is the newest
+			if r.Key == nk {
+				have = true
+			} else if isLegacyAppKey(r.Key, uuid) {
+				from = r.Key
+			}
+		}
+		if have || from == "" {
+			continue
+		}
+		if ok, err := a.db.RenameRoute(ctx, from, nk); err != nil {
+			slog.Warn("route key migration failed", "from", from, "to", nk, "err", err)
+		} else if ok {
+			slog.Info("route key migrated to a stable Coolify app key", "from", from, "to", nk)
+		}
+	}
+}
+
 // desired computes the plan for the current settings, routes and containers.
 type fwPlan struct {
 	clients []netip.Addr // redirected into the proxy
@@ -267,13 +302,14 @@ func (a *Agent) desired(ctx context.Context) (store.Settings, []xcore.RoutePlan,
 	if err != nil {
 		return s, nil, fp, err
 	}
+	a.mu.Lock()
+	containers := a.containers
+	a.mu.Unlock()
+	a.migrateAppKeys(ctx, containers)
 	routes, err := a.db.ListRoutes(ctx)
 	if err != nil {
 		return s, nil, fp, err
 	}
-	a.mu.Lock()
-	containers := a.containers
-	a.mu.Unlock()
 	byKey := map[string][]netip.Addr{}
 	for _, c := range containers {
 		if c.State != "running" || !routable(c) {

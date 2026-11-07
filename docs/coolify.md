@@ -35,8 +35,14 @@ Coolify's **Terminal** tab on the `agent` service works too (`v2dock status`).
 ## What to route
 
 Your Coolify apps appear on the **Containers** page under their Coolify
-names. Turning VPN on for an app follows it across redeploys (the selection is
-keyed by the compose project and service, which Coolify keeps stable).
+names. Turning VPN on for an app follows it across redeploys and restarts. The
+selection is keyed by the Coolify application uuid (`coolify:app/<uuid>`):
+Coolify names an app's compose service `<uuid>-<deploy timestamp>`, so the
+compose project/service pair changes on every deploy. Coolify services and
+other compose stacks, whose service names are stable, are keyed by compose
+project/service. Pull-request previews are separate deployments with their own
+key. Routes saved under an app's old per-deploy key are moved to the stable key
+automatically after upgrading.
 
 Avoid routing Coolify itself (`coolify`, `coolify-proxy`, `coolify-db`,
 `coolify-redis`) unless you know why: the proxy then fetches certificates
